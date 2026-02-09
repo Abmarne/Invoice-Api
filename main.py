@@ -9,8 +9,8 @@ from pdf2image import convert_from_path
 import tempfile
 
 # --- Environment Variables ---
-SUPABASE_URL = os.getenv("SUPABASE_URL", "https://ajcjqjkrpgdkvpkppjyj.supabase.co")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY", "sb_publishable_DEffvKR_hgpRYRMl4Dj5sg_eV4NmQvL")
+SUPABASE_URL = os.getenv("SUPABASE_URL", "your_url_here")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY", "your_key_here")
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 app = FastAPI()
