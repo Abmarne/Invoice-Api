@@ -1,3 +1,9 @@
+"""
+Invoice Processing API
+Author: Abhiraj Marne
+All Rights Reserved © 2024
+"""
+
 from fastapi import FastAPI, HTTPException, Request, UploadFile, File
 from pydantic import BaseModel
 from supabase import create_client, Client
