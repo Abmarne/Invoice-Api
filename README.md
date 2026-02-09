@@ -3,7 +3,7 @@
 A FastAPI-based application that extracts and processes invoice data from images, PDFs, or JSON payloads using LLM (Ollama) and stores the data in Supabase.
 
 **Author:** Abhiraj Marne  
-**All Rights Reserved © 2024**
+**All Rights Reserved © 2026**
 
 ## Features
 
