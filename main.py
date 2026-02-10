@@ -1,9 +1,3 @@
-"""
-Invoice Processing API
-Author: Abhiraj Marne
-All Rights Reserved © 2024
-"""
-
 from fastapi import FastAPI, HTTPException, Request, UploadFile, File
 from pydantic import BaseModel
 from supabase import create_client, Client
@@ -11,12 +5,13 @@ import os
 import ollama
 import json
 import re
-from pdf2image import convert_from_path
 import tempfile
+import fitz  # PyMuPDF
+from datetime import datetime
 
 # --- Environment Variables ---
-SUPABASE_URL = os.getenv("SUPABASE_URL", "your_url_here")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY", "your_key_here")
+SUPABASE_URL = os.getenv("SUPABASE_URL", "https://ajcjqjkrpgdkvpkppjyj.supabase.co")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY", "sb_publishable_DEffvKR_hgpRYRMl4Dj5sg_eV4NmQvL")
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 app = FastAPI()
@@ -44,6 +39,16 @@ def deduplicate_items(items):
             merged[name] = qty
     return [{"name": n, "qty": q} for n, q in merged.items()]
 
+# --- Helper: Normalize Date ---
+def normalize_date(date_str: str) -> str:
+    for fmt in ("%d.%m.%Y", "%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y", "%d-%m-%Y", "%d %b %Y", "%d %B %Y"):
+        try:
+            dt = datetime.strptime(date_str, fmt)
+            return dt.strftime("%Y-%m-%d")
+        except ValueError:
+            continue
+    return date_str
+
 # --- LLM Extraction from Image ---
 def extract_invoice_from_image(image_path: str) -> dict:
     prompt = """
@@ -58,7 +63,7 @@ def extract_invoice_from_image(image_path: str) -> dict:
     """
 
     response = ollama.chat(
-        model="llama3.2-vision",
+        model="llama3.2-vision",  # vision-capable model
         format="json",
         messages=[{
             "role": "user",
@@ -75,9 +80,11 @@ def extract_invoice_from_image(image_path: str) -> dict:
 
     data = json.loads(match.group(0))
 
-    # Ensure Invoice_id is always a string
     if "Invoice_id" in data:
         data["Invoice_id"] = str(data["Invoice_id"])
+
+    if "Invoice_date" in data:
+        data["Invoice_date"] = normalize_date(str(data["Invoice_date"]))
 
     if "List_of_items" in data and isinstance(data["List_of_items"], list):
         data["List_of_items"] = deduplicate_items(data["List_of_items"])
@@ -101,7 +108,7 @@ def normalize_with_llm(body: dict) -> dict:
     """
 
     response = ollama.chat(
-        model="llama3.2",
+        model="llama3.2",  # text-only model
         format="json",
         messages=[{"role": "user", "content": prompt}]
     )
@@ -114,9 +121,11 @@ def normalize_with_llm(body: dict) -> dict:
 
     data = json.loads(match.group(0))
 
-    # Ensure Invoice_id is always a string
     if "Invoice_id" in data:
         data["Invoice_id"] = str(data["Invoice_id"])
+
+    if "Invoice_date" in data:
+        data["Invoice_date"] = normalize_date(str(data["Invoice_date"]))
 
     if "List_of_items" in data and isinstance(data["List_of_items"], list):
         data["List_of_items"] = deduplicate_items(data["List_of_items"])
@@ -126,9 +135,12 @@ def normalize_with_llm(body: dict) -> dict:
 
 # --- Unified Endpoint ---
 @app.post("/invoices")
-async def create_invoice(request: Request, file: UploadFile = File(None)):
+async def create_invoice(request: Request, file: UploadFile = File(None), merge: bool = False):
     try:
-        # Case 1: File upload (PDF or image)
+        normalized = {}
+        all_items = []
+
+        # --- File upload handling ---
         if file:
             suffix = os.path.splitext(file.filename)[-1].lower()
             with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
@@ -136,28 +148,64 @@ async def create_invoice(request: Request, file: UploadFile = File(None)):
                 tmp_path = tmp_file.name
 
             if suffix == ".pdf":
-                images = convert_from_path(tmp_path)
-                image_path = tmp_path.replace(".pdf", ".png")
-                images[0].save(image_path, "PNG")
+                doc = fitz.open(tmp_path)
+                image_paths = []
+                for page_num in range(len(doc)):
+                    page = doc[page_num]
+                    pix = page.get_pixmap()
+                    image_path = tmp_path.replace(".pdf", f"_{page_num+1}.png")
+                    pix.save(image_path)
+                    image_paths.append(image_path)
+
+                for img_path in image_paths:
+                    extracted = extract_invoice_from_image(img_path)
+                    if not normalized:
+                        normalized.update({
+                            "Invoice_id": extracted.get("Invoice_id"),
+                            "Invoice_date": extracted.get("Invoice_date"),
+                            "Vendor_name": extracted.get("Vendor_name")
+                        })
+                    if "List_of_items" in extracted:
+                        all_items.extend(extracted["List_of_items"])
             else:
                 image_path = tmp_path
+                extracted = extract_invoice_from_image(image_path)
+                normalized.update(extracted)
+                if "List_of_items" in extracted:
+                    all_items.extend(extracted["List_of_items"])
 
-            normalized = extract_invoice_from_image(image_path)
-
-        # Case 2: JSON body
-        else:
+        # --- JSON body handling ---
+        try:
             body = await request.json()
-            normalized = normalize_with_llm(body)
+            json_normalized = normalize_with_llm(body)
+            for key in ["Invoice_id", "Invoice_date", "Vendor_name"]:
+                if json_normalized.get(key):
+                    normalized[key] = json_normalized[key]
+            if "List_of_items" in json_normalized:
+                all_items.extend(json_normalized["List_of_items"])
+        except Exception:
+            pass
 
-        # Validate against Pydantic model
+        normalized["List_of_items"] = deduplicate_items(all_items)
         invoice = Invoice(**normalized)
 
-        # Check if Invoice_id already exists
-        existing = supabase.table("invoices").select("invoice_id").eq("invoice_id", invoice.Invoice_id).execute()
+        # --- Duplicate handling ---
+        existing = supabase.table("invoices").select("*").eq("invoice_id", invoice.Invoice_id).execute()
         if existing.data:
-            raise HTTPException(status_code=400, detail=f"Invoice_id {invoice.Invoice_id} already exists")
+            existing_vendor = existing.data[0]["vendor_name"]
+            if existing_vendor != invoice.Vendor_name:
+                raise HTTPException(status_code=400, detail="Invoice_id already exists for a different vendor. Strict mode: no duplicates allowed.")
 
-        # Insert into Supabase
+            if not merge:
+                return {"message": f"Invoice_id {invoice.Invoice_id} already exists for vendor {invoice.Vendor_name}. No action taken."}
+
+            existing_items = existing.data[0]["list_of_items"]
+            merged_items = deduplicate_items(existing_items + [item.model_dump() for item in invoice.List_of_items])
+            update_data = {"list_of_items": merged_items}
+            response = supabase.table("invoices").update(update_data).eq("invoice_id", invoice.Invoice_id).execute()
+            return {"message": "Invoice merged successfully", "data": response.data}
+
+        # --- Insert new invoice ---
         data = {
             "invoice_id": invoice.Invoice_id,
             "invoice_date": invoice.Invoice_date,
