@@ -21,7 +21,7 @@ A FastAPI-based application that extracts and processes invoice data from images
 - Pydantic
 - Supabase client
 - Ollama (with `llama3.2-vision` and `llama3.2` models)
-- pdf2image
+- pymupdf
 - python-multipart
 
 ## Installation
