@@ -8,6 +8,8 @@ import re
 import tempfile
 import fitz  # PyMuPDF
 from datetime import datetime
+import chromadb
+from chromadb.config import Settings
 
 # --- Environment Variables ---
 SUPABASE_URL = os.getenv("SUPABASE_URL", "https://ajcjqjkrpgdkvpkppjyj.supabase.co")
@@ -133,6 +135,36 @@ def normalize_with_llm(body: dict) -> dict:
     allowed_keys = {"Invoice_id", "Invoice_date", "Vendor_name", "List_of_items"}
     return {k: v for k, v in data.items() if k in allowed_keys}
 
+# --- ChromaDB Setup ---
+
+chroma_client = chromadb.Client(Settings(persist_directory="./chroma_db"))
+collection = chroma_client.get_or_create_collection(name="invoices")
+
+def embed_text(text: str):
+    response = ollama.embeddings(model="nomic-embed-text", prompt=text)
+    return response["embedding"]
+
+# --- Create embeddings ---
+def add_invoice_to_chroma(invoice: Invoice):
+    # Convert invoice into a text string
+    text = f"Invoice {invoice.Invoice_id} from {invoice.Vendor_name} on {invoice.Invoice_date}. Items: " + \
+           ", ".join([f"{item.qty} x {item.name}" for item in invoice.List_of_items])
+
+    # Generate embedding
+    embedding = embed_text(text)
+
+    # Store in ChromaDB
+    collection.add(
+        ids=[invoice.Invoice_id],
+        embeddings=[embedding],
+        metadatas=[{
+            "vendor_name": invoice.Vendor_name,
+            "invoice_date": invoice.Invoice_date,
+            "items": [item.model_dump() for item in invoice.List_of_items]
+        }],
+        documents=[json.dumps(invoice.model_dump())]
+    )
+
 # --- Unified Endpoint ---
 @app.post("/invoices")
 async def create_invoice(request: Request, file: UploadFile = File(None), merge: bool = False):
@@ -203,7 +235,9 @@ async def create_invoice(request: Request, file: UploadFile = File(None), merge:
             merged_items = deduplicate_items(existing_items + [item.model_dump() for item in invoice.List_of_items])
             update_data = {"list_of_items": merged_items}
             response = supabase.table("invoices").update(update_data).eq("invoice_id", invoice.Invoice_id).execute()
+            add_invoice_to_chroma(invoice)
             return {"message": "Invoice merged successfully", "data": response.data}
+            
 
         # --- Insert new invoice ---
         data = {
@@ -212,12 +246,37 @@ async def create_invoice(request: Request, file: UploadFile = File(None), merge:
             "vendor_name": invoice.Vendor_name,
             "list_of_items": [item.model_dump() for item in invoice.List_of_items]
         }
+        add_invoice_to_chroma(invoice)
         response = supabase.table("invoices").insert(data).execute()
+        
 
         if not response.data:
             raise HTTPException(status_code=400, detail="Insert failed")
 
         return {"message": "Invoice inserted successfully", "data": response.data}
 
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    
+# --- New Endpoint: Read from ChromaDB ---
+@app.post("/invoices/vector")
+async def search_invoices(request: Request):
+    try:
+        body = await request.json()
+        query = body.get("query")
+        if not query:
+            raise HTTPException(status_code=400, detail="Missing 'query' in request body")
+
+        # Generate embedding for query
+        embedding = embed_text(query)
+
+        # Query ChromaDB
+        results = collection.query(query_embeddings=[embedding], n_results=5)
+
+        return {
+            "message": "Search completed",
+            "query": query,
+            "results": results
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
