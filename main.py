@@ -4,11 +4,10 @@ from supabase import create_client, Client
 import os
 import ollama
 import json
-import re
 import tempfile
 import fitz  # PyMuPDF
 from datetime import datetime
-import chromadb 
+import chromadb
 from chromadb.config import Settings
 
 # --- Environment Variables ---
@@ -28,6 +27,9 @@ class Invoice(BaseModel):
     Invoice_date: str
     Vendor_name: str
     List_of_items: list[Item]
+
+class QueryRequest(BaseModel):
+    query: str
 
 # --- Helper: Deduplicate & Merge Quantities ---
 def deduplicate_items(items):
@@ -51,173 +53,64 @@ def normalize_date(date_str: str) -> str:
             continue
     return date_str
 
-# --- LLM Extraction from Image ---
-def extract_invoice_from_image(image_path: str) -> dict:
-    prompt = """
-    Extract the following details from this invoice image and return them as a JSON object:
-    - Invoice_id
-    - Invoice_date
-    - Vendor_name
-    - List_of_items (each item should have 'name' and 'qty')
-
-    Return only one valid JSON object with these exact keys.
-    Ignore any extra fields not listed above.
-    """
-
-    response = ollama.chat(
-        model="llama3.2-vision",  # vision-capable model
-        format="json",
-        messages=[{
-            "role": "user",
-            "content": prompt,
-            "images": [image_path]
-        }]
-    )
-
-    raw = response["message"]["content"]
-
-    match = re.search(r"\{.*\}", raw, re.DOTALL)
-    if not match:
-        raise HTTPException(status_code=500, detail="No JSON found in LLM response")
-
-    data = json.loads(match.group(0))
-
-    if "Invoice_id" in data:
-        data["Invoice_id"] = str(data["Invoice_id"])
-
-    if "Invoice_date" in data:
-        data["Invoice_date"] = normalize_date(str(data["Invoice_date"]))
-
-    if "List_of_items" in data and isinstance(data["List_of_items"], list):
-        data["List_of_items"] = deduplicate_items(data["List_of_items"])
-
-    allowed_keys = {"Invoice_id", "Invoice_date", "Vendor_name", "List_of_items"}
-    return {k: v for k, v in data.items() if k in allowed_keys}
-
-# --- LLM Normalization for JSON ---
-def normalize_with_llm(body: dict) -> dict:
-    prompt = f"""
-    Map the following JSON keys to these canonical fields:
-    - Invoice_id
-    - Invoice_date
-    - Vendor_name
-    - List_of_items (each item should have 'name' and 'qty')
-
-    Input JSON: {body}
-
-    Return only one valid JSON object with these exact keys.
-    Ignore any extra fields not listed above.
-    """
-
-    response = ollama.chat(
-        model="llama3.2",  # text-only model
-        format="json",
-        messages=[{"role": "user", "content": prompt}]
-    )
-
-    raw = response["message"]["content"]
-
-    match = re.search(r"\{.*\}", raw, re.DOTALL)
-    if not match:
-        raise HTTPException(status_code=500, detail="No JSON found in LLM response")
-
-    data = json.loads(match.group(0))
-
-    if "Invoice_id" in data:
-        data["Invoice_id"] = str(data["Invoice_id"])
-
-    if "Invoice_date" in data:
-        data["Invoice_date"] = normalize_date(str(data["Invoice_date"]))
-
-    if "List_of_items" in data and isinstance(data["List_of_items"], list):
-        data["List_of_items"] = deduplicate_items(data["List_of_items"])
-
-    allowed_keys = {"Invoice_id", "Invoice_date", "Vendor_name", "List_of_items"}
-    return {k: v for k, v in data.items() if k in allowed_keys}
-
 # --- ChromaDB Setup ---
-
 chroma_client = chromadb.Client(Settings(persist_directory="./chroma_db"))
+# chroma_client = chromadb.PersistentClient(path="./chroma_db")
 collection = chroma_client.get_or_create_collection(name="invoices")
 
 def embed_text(text: str):
-    response = ollama.embeddings(model="nomic-embed-text", prompt=text)
-    return response["embedding"]
+    try:
+        response = ollama.embeddings(model="nomic-embed-text", prompt=text)
+        return response["embedding"]
+    except Exception as e:
+        print("Embedding failed:", e)
+        return None
 
 # --- Create embeddings ---
 def add_invoice_to_chroma(invoice: Invoice):
-    # Convert invoice into a text string
     text = f"Invoice {invoice.Invoice_id} from {invoice.Vendor_name} on {invoice.Invoice_date}. Items: " + \
            ", ".join([f"{item.qty} x {item.name}" for item in invoice.List_of_items])
 
-    # Generate embedding
     embedding = embed_text(text)
+    if embedding is None:
+        print("Skipping ChromaDB insert because embedding failed.")
+        return
 
-    # Store in ChromaDB
     collection.add(
         ids=[invoice.Invoice_id],
         embeddings=[embedding],
         metadatas=[{
             "vendor_name": invoice.Vendor_name,
             "invoice_date": invoice.Invoice_date,
-            "items": [item.model_dump() for item in invoice.List_of_items]
+            "items": ", ".join([f"{item.qty} x {item.name}" for item in invoice.List_of_items])
         }],
         documents=[json.dumps(invoice.model_dump())]
     )
+    print("Inserted into ChromaDB:", invoice.Invoice_id)
 
-# --- Unified Endpoint ---
+# --- Insert Endpoint ---
 @app.post("/invoices")
 async def create_invoice(request: Request, file: UploadFile = File(None), merge: bool = False):
     try:
         normalized = {}
         all_items = []
 
-        # --- File upload handling ---
-        if file:
-            suffix = os.path.splitext(file.filename)[-1].lower()
-            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
-                tmp_file.write(await file.read())
-                tmp_path = tmp_file.name
-
-            if suffix == ".pdf":
-                doc = fitz.open(tmp_path)
-                image_paths = []
-                for page_num in range(len(doc)):
-                    page = doc[page_num]
-                    pix = page.get_pixmap()
-                    image_path = tmp_path.replace(".pdf", f"_{page_num+1}.png")
-                    pix.save(image_path)
-                    image_paths.append(image_path)
-
-                for img_path in image_paths:
-                    extracted = extract_invoice_from_image(img_path)
-                    if not normalized:
-                        normalized.update({
-                            "Invoice_id": extracted.get("Invoice_id"),
-                            "Invoice_date": extracted.get("Invoice_date"),
-                            "Vendor_name": extracted.get("Vendor_name")
-                        })
-                    if "List_of_items" in extracted:
-                        all_items.extend(extracted["List_of_items"])
-            else:
-                image_path = tmp_path
-                extracted = extract_invoice_from_image(image_path)
-                normalized.update(extracted)
-                if "List_of_items" in extracted:
-                    all_items.extend(extracted["List_of_items"])
-
         # --- JSON body handling ---
         try:
             body = await request.json()
-            json_normalized = normalize_with_llm(body)
-            for key in ["Invoice_id", "Invoice_date", "Vendor_name"]:
-                if json_normalized.get(key):
-                    normalized[key] = json_normalized[key]
-            if "List_of_items" in json_normalized:
-                all_items.extend(json_normalized["List_of_items"])
+            normalized.update(body)
+            if "List_of_items" in body:
+                all_items.extend(body["List_of_items"])
         except Exception:
             pass
 
+        # Ensure required fields exist
+        required_keys = ["Invoice_id", "Invoice_date", "Vendor_name"]
+        for key in required_keys:
+            if key not in normalized:
+                raise HTTPException(status_code=400, detail=f"Missing required field: {key}")
+
+        normalized["Invoice_date"] = normalize_date(normalized["Invoice_date"])
         normalized["List_of_items"] = deduplicate_items(all_items)
         invoice = Invoice(**normalized)
 
@@ -231,13 +124,17 @@ async def create_invoice(request: Request, file: UploadFile = File(None), merge:
             if not merge:
                 return {"message": f"Invoice_id {invoice.Invoice_id} already exists for vendor {invoice.Vendor_name}. No action taken."}
 
+            # Merge items
             existing_items = existing.data[0]["list_of_items"]
             merged_items = deduplicate_items(existing_items + [item.model_dump() for item in invoice.List_of_items])
             update_data = {"list_of_items": merged_items}
             response = supabase.table("invoices").update(update_data).eq("invoice_id", invoice.Invoice_id).execute()
+
+            # Update ChromaDB with merged invoice
+            invoice.List_of_items = [Item(**item) for item in merged_items]
             add_invoice_to_chroma(invoice)
+
             return {"message": "Invoice merged successfully", "data": response.data}
-            
 
         # --- Insert new invoice ---
         data = {
@@ -246,37 +143,62 @@ async def create_invoice(request: Request, file: UploadFile = File(None), merge:
             "vendor_name": invoice.Vendor_name,
             "list_of_items": [item.model_dump() for item in invoice.List_of_items]
         }
-        add_invoice_to_chroma(invoice)
         response = supabase.table("invoices").insert(data).execute()
-        
 
         if not response.data:
             raise HTTPException(status_code=400, detail="Insert failed")
+
+        # Add to ChromaDB
+        add_invoice_to_chroma(invoice)
 
         return {"message": "Invoice inserted successfully", "data": response.data}
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
     
 # --- New Endpoint: Read from ChromaDB ---
+# --- Vector + Filter Search Endpoint ---
 @app.post("/invoices/vector")
-async def search_invoices(request: Request):
+async def search_invoices(query_request: QueryRequest):
     try:
-        body = await request.json()
-        query = body.get("query")
-        if not query:
-            raise HTTPException(status_code=400, detail="Missing 'query' in request body")
+        # Build metadata filter dynamically
+        filters = {}
+        if query_request.vendor_name:
+            filters["vendor_name"] = query_request.vendor_name
+        if query_request.invoice_date:
+            filters["invoice_date"] = query_request.invoice_date
+        if query_request.item:
+            filters["items"] = {"$contains": query_request.item}
 
-        # Generate embedding for query
-        embedding = embed_text(query)
+        # Handle semantic query
+        query_embedding = None
+        if query_request.query:
+            query_embedding = embed_text(query_request.query)
+            if query_embedding is None:
+                raise HTTPException(status_code=500, detail="Embedding failed for query")
 
-        # Query ChromaDB
-        results = collection.query(query_embeddings=[embedding], n_results=5)
+        # Perform search
+        if query_embedding:
+            results = collection.query(
+                query_embeddings=[query_embedding],
+                n_results=5,
+                where=filters if filters else None,
+                include=["metadatas", "documents", "distances"]
+            )
+        else:
+            # If no semantic query, just filter by metadata
+            results = collection.get(
+                where=filters if filters else None,
+                include=["metadatas", "documents"]
+            )
 
         return {
             "message": "Search completed",
-            "query": query,
+            "query": query_request.query,
+            "filters": filters,
             "results": results
         }
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
