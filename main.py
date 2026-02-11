@@ -8,7 +8,7 @@ import re
 import tempfile
 import fitz  # PyMuPDF
 from datetime import datetime
-import chromadb
+import chromadb 
 from chromadb.config import Settings
 
 # --- Environment Variables ---

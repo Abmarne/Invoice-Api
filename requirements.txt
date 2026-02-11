@@ -1,7 +1,8 @@
-fastapi==0.104.1
-pydantic==2.5.0
-supabase-py==2.3.5
-ollama==0.1.21
-pymupdf==1.22.3
-python-multipart==0.0.6
-uvicorn==0.24.0
+fastapi
+pydantic
+supabase
+ollama
+pymupdf
+python-multipart
+uvicorn
+chromadb
