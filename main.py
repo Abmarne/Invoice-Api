@@ -9,6 +9,8 @@ import tempfile
 import fitz  # PyMuPDF
 import logging
 from datetime import datetime
+import chromadb
+from chromadb.config import Settings
 
 # --- Logging Setup ---
 logging.basicConfig(level=logging.INFO)
@@ -31,6 +33,10 @@ class Invoice(BaseModel):
     Invoice_date: str | None = None
     Vendor_name: str | None = None
     List_of_items: list[Item] = []
+
+# --- ChromaDB Setup ---
+chroma_client = chromadb.PersistentClient(path="./chroma_storage")
+invoice_collection = chroma_client.get_or_create_collection(name="invoices")
 
 # --- Helper: Deduplicate & Merge Quantities ---
 def deduplicate_items(items):
@@ -180,7 +186,44 @@ def process_file(file: UploadFile) -> dict:
     normalized["List_of_items"] = deduplicate_items(all_items)
     return normalized
 
+# --- Helper: Store in ChromaDB ---
+def store_in_chromadb(invoice: Invoice):
+    text_repr = f"Invoice {invoice.Invoice_id} from {invoice.Vendor_name} on {invoice.Invoice_date}. Items: " + \
+                ", ".join([f"{item.name} (qty {item.qty})" for item in invoice.List_of_items])
+
+    # Generate embedding
+    embedding_response = ollama.embeddings(model="llama3.2", prompt=text_repr)
+    embedding = embedding_response["embedding"]
+
+    # Flatten items into strings for metadata
+    item_names = [item.name for item in invoice.List_of_items]
+    item_qtys = [item.qty for item in invoice.List_of_items]
+
+    invoice_collection.add(
+        ids=[invoice.Invoice_id],
+        embeddings=[embedding],
+        metadatas=[{
+            "vendor_name": invoice.Vendor_name,
+            "invoice_date": invoice.Invoice_date,
+            "items": item_names,   # list of strings ✅ valid
+            "quantities": item_qtys  # list of ints ✅ valid
+        }],
+        documents=[text_repr]
+    )
+    logger.info(f"Stored invoice {invoice.Invoice_id} in ChromaDB")
+    
 # --- Unified Endpoint ---
+
+@app.get("/invoices/debug")
+def debug_invoices():
+    # Retrieve everything stored in the collection
+    all_invoices = invoice_collection.get()
+    return {
+        "ids": all_invoices.get("ids", []),
+        # "metadatas": all_invoices.get("metadatas", []),
+        # "documents": all_invoices.get("documents", []),
+        # "embeddings": all_invoices.get("embeddings", [])
+    }
 @app.post("/invoices")
 async def create_invoice(request: Request, file: UploadFile = File(None), merge: bool = False):
     try:
@@ -207,7 +250,7 @@ async def create_invoice(request: Request, file: UploadFile = File(None), merge:
 
         normalized["List_of_items"] = deduplicate_items(all_items)
 
-        # --- Validation: ensure required fields are present ---
+        # --- Validation ---
         required_fields = ["Invoice_id", "Invoice_date", "Vendor_name"]
         for field in required_fields:
             if not normalized.get(field):
@@ -232,6 +275,10 @@ async def create_invoice(request: Request, file: UploadFile = File(None), merge:
             merged_items = deduplicate_items(existing_items + [item.model_dump() for item in invoice.List_of_items])
             update_data = {"list_of_items": merged_items}
             response = supabase.table("invoices").update(update_data).eq("invoice_id", invoice.Invoice_id).execute()
+
+            # --- Store merged invoice in ChromaDB ---
+            store_in_chromadb(invoice)
+
             return {"message": "Invoice merged successfully", "data": response.data}
 
         # --- Insert new invoice ---
@@ -246,8 +293,12 @@ async def create_invoice(request: Request, file: UploadFile = File(None), merge:
         if not response.data:
             raise HTTPException(status_code=400, detail="Insert failed")
 
+        # --- Store new invoice in ChromaDB ---
+        store_in_chromadb(invoice)
+
         return {"message": "Invoice inserted successfully", "data": response.data}
 
     except Exception as e:
         logger.error(f"Error processing invoice: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+    
