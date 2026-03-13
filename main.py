@@ -188,29 +188,45 @@ def process_file(file: UploadFile) -> dict:
 
 # --- Helper: Store in ChromaDB ---
 def store_in_chromadb(invoice: Invoice):
+    # --- Invoice-level embedding ---
     text_repr = f"Invoice {invoice.Invoice_id} from {invoice.Vendor_name} on {invoice.Invoice_date}. Items: " + \
                 ", ".join([f"{item.name} (qty {item.qty})" for item in invoice.List_of_items])
 
-    # Generate embedding
-    embedding_response = ollama.embeddings(model="llama3.2", prompt=text_repr)
-    embedding = embedding_response["embedding"]
+    invoice_embedding_response = ollama.embeddings(model="llama3.2", prompt=text_repr)
+    invoice_embedding = invoice_embedding_response["embedding"]
 
-    # Flatten items into strings for metadata
-    item_names = [item.name for item in invoice.List_of_items]
-    item_qtys = [item.qty for item in invoice.List_of_items]
-
+    # Store invoice-level embedding
     invoice_collection.add(
-        ids=[invoice.Invoice_id],
-        embeddings=[embedding],
+        ids=[f"invoice_{invoice.Invoice_id}"],
+        embeddings=[invoice_embedding],
         metadatas=[{
             "vendor_name": invoice.Vendor_name,
             "invoice_date": invoice.Invoice_date,
-            "items": item_names,   # list of strings ✅ valid
-            "quantities": item_qtys  # list of ints ✅ valid
+            "chunk_type": "invoice"
         }],
         documents=[text_repr]
     )
-    logger.info(f"Stored invoice {invoice.Invoice_id} in ChromaDB")
+
+    # --- Item-level embeddings ---
+    for idx, item in enumerate(invoice.List_of_items):
+        item_text = f"Item: {item.name}, Quantity: {item.qty}, Vendor: {invoice.Vendor_name}, Invoice: {invoice.Invoice_id}"
+        item_embedding_response = ollama.embeddings(model="llama3.2", prompt=item_text)
+        item_embedding = item_embedding_response["embedding"]
+
+        invoice_collection.add(
+            ids=[f"invoice_{invoice.Invoice_id}_item_{idx}"],
+            embeddings=[item_embedding],
+            metadatas=[{
+                "vendor_name": invoice.Vendor_name,
+                "invoice_date": invoice.Invoice_date,
+                "item_name": item.name,
+                "item_qty": item.qty,
+                "chunk_type": "item"
+            }],
+            documents=[item_text]
+        )
+
+    logger.info(f"Stored invoice {invoice.Invoice_id} with hybrid chunking in ChromaDB")
     
 # --- Unified Endpoint ---
 
