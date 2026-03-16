@@ -1,0 +1,748 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Universal Document Extractor</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --primary: #4F46E5;
+            --primary-dark: #4338CA;
+            --secondary: #10B981;
+            --danger: #EF4444;
+            --dark: #1F2937;
+            --light: #F9FAFB;
+            --gray: #6B7280;
+            --border: #E5E7EB;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .header {
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            margin-bottom: 30px;
+        }
+
+        .header h1 {
+            color: var(--dark);
+            font-size: 32px;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            color: var(--gray);
+            font-size: 16px;
+        }
+
+        .main-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 30px;
+            margin-bottom: 30px;
+        }
+
+        @media (max-width: 968px) {
+            .main-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .card {
+            background: white;
+            border-radius: 12px;
+            padding: 30px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+
+        .card-title {
+            font-size: 20px;
+            font-weight: 600;
+            color: var(--dark);
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .card-title::before {
+            content: '';
+            width: 4px;
+            height: 24px;
+            background: var(--primary);
+            border-radius: 2px;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-group label {
+            display: block;
+            font-weight: 500;
+            color: var(--dark);
+            margin-bottom: 8px;
+        }
+
+        .form-group input,
+        .form-group textarea,
+        .form-group select {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid var(--border);
+            border-radius: 8px;
+            font-size: 14px;
+            transition: all 0.3s;
+            font-family: inherit;
+        }
+
+        .form-group input:focus,
+        .form-group textarea:focus,
+        .form-group select:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.1);
+        }
+
+        .form-group textarea {
+            min-height: 120px;
+            resize: vertical;
+        }
+
+        .file-upload {
+            border: 2px dashed var(--border);
+            border-radius: 8px;
+            padding: 30px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s;
+            position: relative;
+        }
+
+        .file-upload:hover {
+            border-color: var(--primary);
+            background: rgba(79, 70, 229, 0.05);
+        }
+
+        .file-upload.has-file {
+            border-color: var(--secondary);
+            background: rgba(16, 185, 129, 0.05);
+        }
+
+        .file-upload input[type="file"] {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            opacity: 0;
+            cursor: pointer;
+        }
+
+        .file-upload-icon {
+            font-size: 48px;
+            margin-bottom: 10px;
+        }
+
+        .file-name {
+            font-weight: 500;
+            color: var(--dark);
+            margin-top: 10px;
+        }
+
+        .btn {
+            padding: 14px 28px;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .btn-primary {
+            background: var(--primary);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: var(--primary-dark);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(79, 70, 229, 0.3);
+        }
+
+        .btn-secondary {
+            background: var(--secondary);
+            color: white;
+        }
+
+        .btn-secondary:hover {
+            background: #059669;
+        }
+
+        .btn-block {
+            width: 100%;
+            justify-content: center;
+        }
+
+        .schema-builder {
+            background: var(--light);
+            padding: 20px;
+            border-radius: 8px;
+            margin-top: 15px;
+        }
+
+        .field-item {
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 10px;
+            display: grid;
+            grid-template-columns: 2fr 1fr auto;
+            gap: 10px;
+            align-items: center;
+        }
+
+        .field-item input,
+        .field-item select {
+            padding: 8px;
+            border: 2px solid var(--border);
+            border-radius: 6px;
+            font-size: 14px;
+        }
+
+        .btn-small {
+            padding: 8px 16px;
+            font-size: 14px;
+        }
+
+        .btn-danger {
+            background: var(--danger);
+            color: white;
+        }
+
+        .btn-danger:hover {
+            background: #DC2626;
+        }
+
+        .result-section {
+            background: white;
+            border-radius: 12px;
+            padding: 30px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            margin-top: 30px;
+            display: none;
+        }
+
+        .result-section.show {
+            display: block;
+        }
+
+        .result-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 2px solid var(--border);
+        }
+
+        .result-status {
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-weight: 600;
+            font-size: 14px;
+        }
+
+        .status-success {
+            background: rgba(16, 185, 129, 0.1);
+            color: var(--secondary);
+        }
+
+        .status-error {
+            background: rgba(239, 68, 68, 0.1);
+            color: var(--danger);
+        }
+
+        .json-output {
+            background: var(--dark);
+            color: #10B981;
+            padding: 20px;
+            border-radius: 8px;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            overflow-x: auto;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            max-height: 500px;
+            overflow-y: auto;
+        }
+
+        .loading {
+            display: none;
+            text-align: center;
+            padding: 40px;
+        }
+
+        .loading.show {
+            display: block;
+        }
+
+        .spinner {
+            border: 4px solid rgba(79, 70, 229, 0.1);
+            border-left-color: var(--primary);
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .template-buttons {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-bottom: 15px;
+        }
+
+        .template-btn {
+            padding: 8px 16px;
+            background: var(--light);
+            border: 2px solid var(--border);
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.3s;
+        }
+
+        .template-btn:hover {
+            border-color: var(--primary);
+            background: rgba(79, 70, 229, 0.05);
+        }
+
+        .template-btn.active {
+            background: var(--primary);
+            color: white;
+            border-color: var(--primary);
+        }
+
+        .info-box {
+            background: rgba(79, 70, 229, 0.1);
+            border-left: 4px solid var(--primary);
+            padding: 15px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+        }
+
+        .info-box p {
+            color: var(--dark);
+            font-size: 14px;
+            line-height: 1.6;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-top: 20px;
+        }
+
+        .stat-card {
+            background: var(--light);
+            padding: 20px;
+            border-radius: 8px;
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 32px;
+            font-weight: bold;
+            color: var(--primary);
+            margin-bottom: 5px;
+        }
+
+        .stat-label {
+            color: var(--gray);
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <div class="header">
+            <h1>📄 Universal Document Extractor</h1>
+            <p>Extract any data from any document using AI - Define your own schema and extraction rules</p>
+        </div>
+
+        <!-- Main Grid -->
+        <div class="main-grid">
+            <!-- Left Column: Schema Builder -->
+            <div class="card">
+                <div class="card-title">Step 1: Define Your Schema</div>
+                
+                <div class="info-box">
+                    <p><strong>What data do you want to extract?</strong> Define the fields you need, and our AI will extract them from your document.</p>
+                </div>
+
+                <div class="template-buttons">
+                    <button class="template-btn" onclick="loadTemplate('invoice')">Invoice</button>
+                    <button class="template-btn" onclick="loadTemplate('receipt')">Receipt</button>
+                    <button class="template-btn" onclick="loadTemplate('contract')">Contract</button>
+                    <button class="template-btn" onclick="loadTemplate('resume')">Resume</button>
+                    <button class="template-btn" onclick="loadTemplate('custom')">Custom</button>
+                </div>
+
+                <div class="schema-builder">
+                    <div id="fields-container"></div>
+                    
+                    <button class="btn btn-secondary btn-small" onclick="addField()" style="margin-top: 10px;">
+                        + Add Field
+                    </button>
+                </div>
+
+                <div class="form-group" style="margin-top: 20px;">
+                    <label>Document Type</label>
+                    <select id="document-type">
+                        <option value="invoice">Invoice</option>
+                        <option value="receipt">Receipt</option>
+                        <option value="contract">Contract</option>
+                        <option value="legal">Legal Document</option>
+                        <option value="medical">Medical Record</option>
+                        <option value="financial">Financial Statement</option>
+                        <option value="academic">Academic Transcript</option>
+                        <option value="resume">Resume/CV</option>
+                        <option value="other">Other</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- Right Column: Extraction Prompt & File Upload -->
+            <div class="card">
+                <div class="card-title">Step 2: Configure Extraction</div>
+
+                <div class="form-group">
+                    <label>Extraction Instructions</label>
+                    <textarea id="extraction-prompt" placeholder="Tell the AI exactly what to look for and how to extract it..."></textarea>
+                </div>
+
+                <div class="form-group">
+                    <label>Upload Document</label>
+                    <div class="file-upload" id="file-upload-area">
+                        <input type="file" id="file-input" accept=".pdf,.png,.jpg,.jpeg,.webp" onchange="handleFileSelect(event)">
+                        <div class="file-upload-icon">📁</div>
+                        <div>Drag & drop or click to upload</div>
+                        <div class="file-name" id="file-name"></div>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label>Table Name (for storage)</label>
+                    <input type="text" id="table-name" value="documents" placeholder="e.g., invoices, receipts, contracts">
+                </div>
+
+                <button class="btn btn-primary btn-block" onclick="extractData()">
+                    🚀 Extract Data
+                </button>
+            </div>
+        </div>
+
+        <!-- Loading State -->
+        <div class="loading" id="loading">
+            <div class="spinner"></div>
+            <p>Processing your document...</p>
+            <p style="color: var(--gray); font-size: 14px; margin-top: 10px;">This may take a few moments</p>
+        </div>
+
+        <!-- Results Section -->
+        <div class="result-section" id="result-section">
+            <div class="result-header">
+                <h2 style="color: var(--dark);">Extraction Results</h2>
+                <span class="result-status status-success" id="result-status">Success ✓</span>
+            </div>
+
+            <div class="stats-grid" id="stats-grid">
+                <!-- Stats will be populated here -->
+            </div>
+
+            <h3 style="margin: 30px 0 15px; color: var(--dark);">Extracted Data</h3>
+            <div class="json-output" id="json-output"></div>
+
+            <h3 style="margin: 30px 0 15px; color: var(--dark);">Metadata</h3>
+            <div class="json-output" id="metadata-output"></div>
+        </div>
+    </div>
+
+    <script>
+        // Schema templates
+        const templates = {
+            invoice: [
+                { name: 'invoice_number', type: 'string' },
+                { name: 'invoice_date', type: 'date' },
+                { name: 'vendor_name', type: 'string' },
+                { name: 'vendor_address', type: 'string' },
+                { name: 'total_amount', type: 'number' },
+                { name: 'tax_amount', type: 'number' },
+                { name: 'line_items', type: 'array', itemType: 'object' }
+            ],
+            receipt: [
+                { name: 'store_name', type: 'string' },
+                { name: 'transaction_date', type: 'date' },
+                { name: 'receipt_number', type: 'string' },
+                { name: 'payment_method', type: 'string' },
+                { name: 'subtotal', type: 'number' },
+                { name: 'tax', type: 'number' },
+                { name: 'total', type: 'number' },
+                { name: 'items', type: 'array', itemType: 'object' }
+            ],
+            contract: [
+                { name: 'contract_title', type: 'string' },
+                { name: 'effective_date', type: 'date' },
+                { name: 'expiration_date', type: 'date' },
+                { name: 'party_a', type: 'string' },
+                { name: 'party_b', type: 'string' },
+                { name: 'key_terms', type: 'array', itemType: 'string' },
+                { name: 'value', type: 'number' }
+            ],
+            resume: [
+                { name: 'full_name', type: 'string' },
+                { name: 'email', type: 'string' },
+                { name: 'phone', type: 'string' },
+                { name: 'education', type: 'array', itemType: 'object' },
+                { name: 'work_experience', type: 'array', itemType: 'object' },
+                { name: 'skills', type: 'array', itemType: 'string' },
+                { name: 'certifications', type: 'array', itemType: 'string' }
+            ],
+            custom: []
+        };
+
+        // Initialize with one field
+        let fieldCount = 0;
+        addField();
+
+        function addField(name = '', type = 'string') {
+            const container = document.getElementById('fields-container');
+            const fieldId = `field-${fieldCount++}`;
+            
+            const fieldDiv = document.createElement('div');
+            fieldDiv.className = 'field-item';
+            fieldDiv.innerHTML = `
+                <input type="text" placeholder="Field name (e.g., invoice_number)" value="${name}" class="field-name">
+                <select class="field-type">
+                    <option value="string" ${type === 'string' ? 'selected' : ''}>Text</option>
+                    <option value="number" ${type === 'number' ? 'selected' : ''}>Number</option>
+                    <option value="date" ${type === 'date' ? 'selected' : ''}>Date</option>
+                    <option value="boolean" ${type === 'boolean' ? 'selected' : ''}>Boolean</option>
+                    <option value="array" ${type === 'array' ? 'selected' : ''}>Array/List</option>
+                </select>
+                <button class="btn btn-danger btn-small" onclick="removeField(this)">Remove</button>
+            `;
+            
+            container.appendChild(fieldDiv);
+            updatePrompt();
+        }
+
+        function removeField(button) {
+            button.parentElement.remove();
+            updatePrompt();
+        }
+
+        function loadTemplate(templateName) {
+            // Update active state on buttons
+            document.querySelectorAll('.template-btn').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            event.target.classList.add('active');
+
+            // Clear existing fields
+            const container = document.getElementById('fields-container');
+            container.innerHTML = '';
+            fieldCount = 0;
+
+            // Load template fields
+            const template = templates[templateName];
+            template.forEach(field => {
+                addField(field.name, field.type);
+            });
+
+            // Update prompt based on template
+            updatePromptForTemplate(templateName);
+        }
+
+        function getSchema() {
+            const fields = document.querySelectorAll('.field-item');
+            const schema = {};
+            
+            fields.forEach(field => {
+                const name = field.querySelector('.field-name').value.trim();
+                const type = field.querySelector('.field-type').value;
+                
+                if (name) {
+                    if (type === 'array') {
+                        schema[name] = [];
+                    } else {
+                        schema[name] = type;
+                    }
+                }
+            });
+            
+            return schema;
+        }
+
+        function updatePrompt() {
+            const schema = getSchema();
+            const fieldNames = Object.keys(schema).join(', ');
+            
+            if (fieldNames) {
+                const prompt = `Extract the following fields from this document: ${fieldNames}. Return the data in JSON format matching the schema exactly. If a field cannot be found, set it to null.`;
+                document.getElementById('extraction-prompt').value = prompt;
+            }
+        }
+
+        function updatePromptForTemplate(templateName) {
+            const prompts = {
+                invoice: 'Extract all invoice details including vendor information, dates, line items with quantities and prices, taxes, and totals. Calculate sums if needed.',
+                receipt: 'Extract purchase information including store details, items purchased with prices, payment method, and all amounts.',
+                contract: 'Extract contract parties, effective dates, key terms and conditions, monetary values, obligations, and important clauses.',
+                resume: 'Extract personal information, education history with dates, work experience with responsibilities and dates, skills, and certifications.',
+                custom: 'Extract all relevant information from this document according to the schema defined above.'
+            };
+            
+            document.getElementById('extraction-prompt').value = prompts[templateName] || prompts.custom;
+        }
+
+        function handleFileSelect(event) {
+            const file = event.target.files[0];
+            if (file) {
+                const fileName = file.name;
+                document.getElementById('file-name').textContent = fileName;
+                document.getElementById('file-upload-area').classList.add('has-file');
+            }
+        }
+
+        async function extractData() {
+            const fileInput = document.getElementById('file-input');
+            const schema = getSchema();
+            const extractionPrompt = document.getElementById('extraction-prompt').value;
+            const documentType = document.getElementById('document-type').value;
+            const tableName = document.getElementById('table-name').value;
+
+            // Validation
+            if (!fileInput.files[0]) {
+                alert('Please select a file');
+                return;
+            }
+
+            if (Object.keys(schema).length === 0) {
+                alert('Please define at least one field in your schema');
+                return;
+            }
+
+            // Show loading
+            document.getElementById('loading').classList.add('show');
+            document.getElementById('result-section').classList.remove('show');
+
+            // Prepare form data
+            const formData = new FormData();
+            formData.append('file', fileInput.files[0]);
+            formData.append('schema', JSON.stringify(schema));
+            formData.append('extraction_prompt', extractionPrompt);
+            formData.append('document_type', documentType);
+            formData.append('table_name', tableName);
+
+            try {
+                const response = await fetch('/api/extract', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const result = await response.json();
+
+                if (response.ok && result.success) {
+                    displayResults(result);
+                } else {
+                    showError(result.detail || 'Extraction failed');
+                }
+            } catch (error) {
+                showError(error.message);
+            } finally {
+                document.getElementById('loading').classList.remove('show');
+            }
+        }
+
+        function displayResults(result) {
+            document.getElementById('result-section').classList.add('show');
+            document.getElementById('result-status').className = 'result-status status-success';
+            document.getElementById('result-status').textContent = 'Success ✓';
+
+            // Display extracted data
+            document.getElementById('json-output').textContent = JSON.stringify(result.extracted_data, null, 2);
+            document.getElementById('metadata-output').textContent = JSON.stringify(result.metadata, null, 2);
+
+            // Populate stats
+            const statsGrid = document.getElementById('stats-grid');
+            statsGrid.innerHTML = `
+                <div class="stat-card">
+                    <div class="stat-value">${Object.keys(result.extracted_data).length}</div>
+                    <div class="stat-label">Fields Extracted</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value">${result.metadata.pages_processed || 1}</div>
+                    <div class="stat-label">Pages Processed</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value">${result.document_id ? '✓' : '✗'}</div>
+                    <div class="stat-label">Stored in DB</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value">${result.vector_id ? '✓' : '✗'}</div>
+                    <div class="stat-label">Vector Indexed</div>
+                </div>
+            `;
+        }
+
+        function showError(message) {
+            document.getElementById('result-section').classList.add('show');
+            document.getElementById('result-status').className = 'result-status status-error';
+            document.getElementById('result-status').textContent = `Error ✗`;
+            document.getElementById('json-output').textContent = message;
+            document.getElementById('metadata-output').textContent = '';
+            document.getElementById('stats-grid').innerHTML = '';
+        }
+
+        // Auto-update prompt when schema changes
+        setInterval(() => {
+            const currentSchema = JSON.stringify(getSchema());
+            if (currentSchema !== window.lastSchema) {
+                updatePrompt();
+                window.lastSchema = currentSchema;
+            }
+        }, 2000);
+    </script>
+</body>
+</html>

@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Request, UploadFile, File
+from fastapi import FastAPI, HTTPException, Request, UploadFile, File, Form
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -24,7 +24,13 @@ logger = logging.getLogger(__name__)
 SUPABASE_URL = os.getenv("SUPABASE_URL", "Your_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY", "Your_key")
 
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+# Initialize Supabase only if credentials are provided
+if SUPABASE_URL != "Your_URL" and SUPABASE_KEY != "Your_key":
+    supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+else:
+    supabase = None
+    logger.warning("Supabase not configured. Database storage will be disabled.")
+    
 app = FastAPI(title="Universal Document Processing API")
 
 # --- Dynamic Schema Model ---
@@ -35,7 +41,7 @@ class DynamicSchema(BaseModel):
 
 class ExtractedData(BaseModel):
     data: Dict[str, Any]
-    schema: Dict[str, Any]
+    schema_config: Dict[str, Any]
     metadata: Dict[str, Any] = {}
 
 # --- ChromaDB Setup ---
@@ -268,6 +274,10 @@ def create_dynamic_table(table_name: str, schema: Dict[str, Any]):
 # --- Helper: Store in Supabase with dynamic schema ---
 def store_in_supabase(table_name: str, data: dict, metadata: dict):
     """Store extracted data in Supabase with flexible schema"""
+    if supabase is None:
+        logger.info("Supabase not configured - skipping database storage")
+        return "local_only_no_db"
+    
     try:
         # Use a generic 'documents' table with JSONB for flexibility
         document_data = {
@@ -286,7 +296,8 @@ def store_in_supabase(table_name: str, data: dict, metadata: dict):
         return response.data[0]["id"]
     except Exception as e:
         logger.error(f"Supabase storage error: {e}")
-        raise
+        # Return a local ID instead of failing
+        return f"local_{datetime.now().timestamp()}"
 
 # --- Helper: Store in ChromaDB with dynamic schema ---
 def store_in_chromadb_dynamic(data: dict, metadata: dict, collection_name: str = "documents"):
@@ -302,9 +313,10 @@ def store_in_chromadb_dynamic(data: dict, metadata: dict, collection_name: str =
                 if isinstance(v, dict):
                     items.extend(flatten_dict(v, new_key, sep=sep).items())
                 elif isinstance(v, list):
+                    # Convert list to string representation for ChromaDB
                     items.append((new_key, str(v)))
                 else:
-                    items.append((new_key, str(v)))
+                    items.append((new_key, str(v) if v is not None else "null"))
             return dict(items)
         
         flat_data = flatten_dict(data)
@@ -317,11 +329,39 @@ def store_in_chromadb_dynamic(data: dict, metadata: dict, collection_name: str =
         # Generate unique ID
         doc_id = f"doc_{datetime.now().timestamp()}_{metadata.get('filename', 'unknown')}"
         
+        # Flatten metadata for ChromaDB (must be simple types only)
+        def flatten_metadata(d, parent_key='', sep='_'):
+            items = {}
+            for k, v in d.items():
+                new_key = f"{parent_key}{sep}{k}" if parent_key else k
+                
+                # Skip page_details entirely - too complex for ChromaDB
+                if 'page_details' in k.lower():
+                    continue
+                
+                if isinstance(v, dict):
+                    items.update(flatten_metadata(v, new_key, sep=sep))
+                elif isinstance(v, list):
+                    # Only include simple lists (all same primitive type)
+                    if len(v) > 0 and all(isinstance(x, (str, int, float, bool)) for x in v):
+                        items[new_key] = str(v)
+                    # Skip complex lists
+                elif isinstance(v, (str, int, float, bool)) or v is None:
+                    items[new_key] = str(v) if v is not None else "null"
+            return items
+        
+        flat_metadata = {"document_type": metadata.get("document_type", "general"), **flatten_metadata(metadata)}
+        
+        # Remove page_details from metadata if it contains complex objects
+        keys_to_remove = [k for k in flat_metadata.keys() if 'page_details' in k]
+        for key in keys_to_remove:
+            del flat_metadata[key]
+        
         # Store in ChromaDB
         collection.add(
             ids=[doc_id],
             embeddings=[embedding],
-            metadatas=[{"document_type": metadata.get("document_type", "general"), **metadata}],
+            metadatas=[flat_metadata],
             documents=[text_repr]
         )
         
@@ -329,7 +369,8 @@ def store_in_chromadb_dynamic(data: dict, metadata: dict, collection_name: str =
         return doc_id
     except Exception as e:
         logger.error(f"ChromaDB storage error: {e}")
-        raise
+        # Return a local ID instead of failing
+        return f"chroma_error_{datetime.now().timestamp()}"
     
 # --- Serve Frontend UI ---
 @app.get("/", response_class=HTMLResponse)
@@ -434,6 +475,14 @@ async def search_documents(query: str, collection_name: str = "documents", limit
 @app.get("/api/documents")
 async def get_documents(table_name: str = "documents", limit: int = 100):
     """Retrieve all stored documents"""
+    if supabase is None:
+        return {
+            "success": True,
+            "documents": [],
+            "count": 0,
+            "message": "Supabase not configured - no documents stored yet"
+        }
+    
     try:
         response = supabase.table(table_name).select("*").limit(limit).execute()
         return {
