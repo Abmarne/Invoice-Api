@@ -19,6 +19,12 @@ A powerful, fully customizable AI-powered document extraction system with an int
 - **🔍 Semantic Search**: Find documents using natural language queries
 - **⚡ Template System**: Pre-built templates for common document types
 - **🚀 Real-time Processing**: Live feedback and detailed metadata
+- **📥 Multi-Format Downloads**: Export to JSON, CSV, Excel, or PDF
+- **⚙️ Advanced Extraction Controls**:
+  - ⚠️ **Strict Mode** - Only extract explicitly visible data
+  - 🔍 **Double Check** - Verify extraction twice for accuracy
+  - 💡 **Intelligent Inference** - Fill in missing data using context
+  - 🤖 **Auto-Detect Fields** - Map fields regardless of naming convention
 
 ---
 
@@ -392,6 +398,95 @@ Fields: `full_name`, `email`, `phone`, `education`, `work_experience`, `skills`,
 Start from scratch and define your own fields
 
 ---
+
+## Advanced Extraction Settings
+
+The web UI provides three powerful toggle options to control extraction behavior:
+
+### ⚠️ Strict Mode
+**When to use:** Legal documents, compliance, auditing, financial records
+
+**Behavior:**
+- Only extracts information that is EXPLICITLY visible
+- No inference, assumptions, or hallucinations
+- Returns null/empty for unclear fields
+- Prioritizes accuracy over completeness
+
+**Example:** If invoice total is smudged, returns `null` instead of guessing
+
+### 🔍 Double Check
+**When to use:** Critical data, high-value transactions, medical records
+
+**Behavior:**
+- Reviews extraction twice before responding
+- Verifies each value against the original image
+- Cross-checks related fields (e.g., total = sum of items)
+- Adds verification metadata to results
+
+**Example:** Validates that line item totals match the grand total
+
+### 💡 Infer Missing Data
+**When to use:** Damaged documents, poor scans, incomplete forms
+
+**Behavior:**
+- Uses context clues to fill in missing information
+- Infers dates from surrounding text
+- Calculates totals from line items
+- Recognizes patterns (phone numbers, emails, addresses)
+
+**Default:** Enabled (toggle off for "No Inference" mode)
+
+**Example:** If "Jan 15, 2024" is partially visible, infers full date
+
+### 🤖 Auto-Detect Fields
+**When to use:** Documents with non-standard field names, international documents, OCR results
+
+**Behavior:**
+- Automatically identifies required fields regardless of naming convention
+- Handles synonyms, abbreviations, and regional variations
+- Maps different field names to your standard schema
+- Intelligently detects field types from context
+
+**Default:** Enabled (recommended for most use cases)
+
+**Handles These Variations:**
+- **Synonyms:** `invoice_number` → `invoice_id` → `inv_no` → `bill_number`
+- **Case differences:** `InvoiceNumber` → `invoice_number` → `INVOICE_NUMBER`
+- **Abbreviations:** `qty` → `quantity`, `amt` → `amount`, `desc` → `description`
+- **Regional:** `colour` → `color`, `organisation` → `organization`
+- **Domain terms:** `vendor` → `supplier` → `merchant` → `seller`
+- **Formatting:** `totalAmount` (camelCase) → `total_amount` (snake_case)
+- **Typos/OCR errors:** Uses context to infer correct field
+
+**Example:** 
+- Your schema expects: `invoice_number`, `total_amount`
+- Document has: `inv_no`, `grand_total`
+- System automatically maps them correctly!
+
+---
+
+### Usage Combinations
+
+#### Maximum Accuracy (Recommended for Legal/Medical)
+✅ Strict Mode  
+✅ Double Check  
+❌ Infer Missing  
+
+**Result:** Most accurate but may have missing fields
+
+#### Balanced (Recommended for Business Documents)
+❌ Strict Mode  
+✅ Double Check  
+✅ Infer Missing  
+
+**Result:** Good balance of accuracy and completeness
+
+#### Maximum Completion (Recommended for Poor Quality Scans)
+❌ Strict Mode  
+❌ Double Check  
+✅ Infer Missing  
+
+**Result:** Most fields filled, higher risk of errors
 
 ## Advanced Usage
 

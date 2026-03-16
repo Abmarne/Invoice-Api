@@ -479,6 +479,61 @@
                 </div>
 
                 <div class="form-group">
+                    <label>Advanced Extraction Settings</label>
+                    <div style="background: var(--light); padding: 15px; border-radius: 8px; margin-top: 10px;">
+                        
+                        <div style="margin-bottom: 15px;">
+                            <label style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
+                                <input type="checkbox" id="strict-mode" style="width: 18px; height: 18px;">
+                                <div>
+                                    <strong>⚠️ Strict Mode</strong>
+                                    <p style="margin: 5px 0 0 0; font-size: 13px; color: var(--gray);">
+                                        Only extract explicitly visible data. No inference or assumptions.
+                                    </p>
+                                </div>
+                            </label>
+                        </div>
+
+                        <div style="margin-bottom: 15px;">
+                            <label style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
+                                <input type="checkbox" id="double-check" style="width: 18px; height: 18px;">
+                                <div>
+                                    <strong>🔍 Double Check</strong>
+                                    <p style="margin: 5px 0 0 0; font-size: 13px; color: var(--gray);">
+                                        Verify extraction twice. Cross-check values for accuracy.
+                                    </p>
+                                </div>
+                            </label>
+                        </div>
+
+                        <div style="margin-bottom: 15px;">
+                            <label style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
+                                <input type="checkbox" id="infer-missing" checked style="width: 18px; height: 18px;">
+                                <div>
+                                    <strong>💡 Infer Missing Data</strong>
+                                    <p style="margin: 5px 0 0 0; font-size: 13px; color: var(--gray);">
+                                        Use context clues to fill in missing but obvious information.
+                                    </p>
+                                </div>
+                            </label>
+                        </div>
+
+                        <div style="margin-bottom: 15px;">
+                            <label style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
+                                <input type="checkbox" id="auto-detect-fields" checked style="width: 18px; height: 18px;">
+                                <div>
+                                    <strong>🤖 Auto-Detect Fields</strong>
+                                    <p style="margin: 5px 0 0 0; font-size: 13px; color: var(--gray);">
+                                        Automatically map fields regardless of naming convention (recommended).
+                                    </p>
+                                </div>
+                            </label>
+                        </div>
+
+                    </div>
+                </div>
+
+                <div class="form-group">
                     <label>Upload Document</label>
                     <div class="file-upload" id="file-upload-area">
                         <input type="file" id="file-input" accept=".pdf,.png,.jpg,.jpeg,.webp" onchange="handleFileSelect(event)">
@@ -695,6 +750,12 @@
             const extractionPrompt = document.getElementById('extraction-prompt').value;
             const documentType = document.getElementById('document-type').value;
             const tableName = document.getElementById('table-name').value;
+            
+            // Get advanced settings
+            const strictMode = document.getElementById('strict-mode').checked;
+            const doubleCheck = document.getElementById('double-check').checked;
+            const inferMissing = document.getElementById('infer-missing').checked;
+            const autoDetectFields = document.getElementById('auto-detect-fields').checked;
 
             // Validation
             if (!fileInput.files[0]) {
@@ -718,6 +779,10 @@
             formData.append('extraction_prompt', extractionPrompt);
             formData.append('document_type', documentType);
             formData.append('table_name', tableName);
+            formData.append('strict_mode', strictMode);
+            formData.append('double_check', doubleCheck);
+            formData.append('infer_missing', inferMissing);
+            formData.append('auto_detect_fields', autoDetectFields);
 
             try {
                 const response = await fetch('/api/extract', {
@@ -751,8 +816,19 @@
             document.getElementById('json-output').textContent = JSON.stringify(result.extracted_data, null, 2);
             document.getElementById('metadata-output').textContent = JSON.stringify(result.metadata, null, 2);
 
-            // Populate stats
+            // Populate stats with extraction settings
             const statsGrid = document.getElementById('stats-grid');
+            
+            // Build extraction settings badges
+            let settingsBadges = '';
+            if (result.metadata.extraction_settings) {
+                const settings = result.metadata.extraction_settings;
+                if (settings.strict_mode) settingsBadges += '<span style="background: #FEF3C7; color: #92400E; padding: 4px 8px; border-radius: 4px; font-size: 12px; margin-right: 5px;">⚠️ Strict</span>';
+                if (settings.double_check) settingsBadges += '<span style="background: #DBEAFE; color: #1E40AF; padding: 4px 8px; border-radius: 4px; font-size: 12px; margin-right: 5px;">🔍 Verified</span>';
+                if (settings.infer_missing) settingsBadges += '<span style="background: #D1FAE5; color: #065F46; padding: 4px 8px; border-radius: 4px; font-size: 12px; margin-right: 5px;">💡 Inferred</span>';
+                if (settings.auto_detect_fields) settingsBadges += '<span style="background: #E0E7FF; color: #3730A3; padding: 4px 8px; border-radius: 4px; font-size: 12px; margin-right: 5px;">🤖 Auto-Mapped</span>';
+            }
+            
             statsGrid.innerHTML = `
                 <div class="stat-card">
                     <div class="stat-value">${Object.keys(result.extracted_data).length}</div>
@@ -770,6 +846,7 @@
                     <div class="stat-value">${result.vector_id ? '✓' : '✗'}</div>
                     <div class="stat-label">Vector Indexed</div>
                 </div>
+                ${settingsBadges ? `<div class="stat-card" style="grid-column: span 4;">${settingsBadges}</div>` : ''}
             `;
         }
 

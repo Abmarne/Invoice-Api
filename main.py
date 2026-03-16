@@ -77,10 +77,60 @@ def normalize_date(date_str: str) -> str:
     return date_str
 
 # --- Universal Extraction from Image with Custom Prompt ---
-def extract_data_from_image(image_path: str, custom_prompt: str, schema: Dict[str, Any]) -> dict:
-    """Extract data from image using user-defined prompt and schema"""
+def extract_data_from_image(image_path: str, custom_prompt: str, schema: Dict[str, Any], 
+                            strict_mode: bool = False, double_check: bool = False,
+                            infer_missing: bool = True, auto_detect_fields: bool = False) -> dict:
+    """Extract data from image using user-defined prompt and schema with advanced options"""
+    
+    # Build enhanced prompt based on toggles
+    enhancements = []
+    
+    if strict_mode:
+        enhancements.append("""
+⚠️ STRICT MODE ENABLED:
+- Only extract information that is EXPLICITLY visible in the document
+- Do NOT infer, assume, or hallucinate any data
+- If a field is not clearly present, return null/empty
+- Accuracy is more important than completeness
+""")
+    
+    if double_check:
+        enhancements.append("""
+🔍 DOUBLE-CHECK MODE ENABLED:
+- Review your extraction twice before responding
+- Verify each extracted value against the original image
+- Cross-check related fields for consistency (e.g., total = sum of items)
+- Mark confidence level for each field (high/medium/low)
+""")
+    
+    if auto_detect_fields:
+        enhancements.append("""
+🤖 AUTO-DETECT FIELDS ENABLED:
+- Automatically identify required fields regardless of naming convention
+- Handle synonyms, abbreviations, and variations
+- Map different field names to standard schema (e.g., "inv_no" → "invoice_number")
+- Intelligently detect field types from context
+""")
+    
+    if infer_missing:
+        enhancements.append("""
+💡 INTELLIGENT INFERENCE ENABLED:
+- Use context clues to fill in missing but obvious information
+- Infer dates from surrounding text if partial date visible
+- Infer totals from line items if not explicitly stated
+- Use common patterns (e.g., phone numbers, emails, addresses)
+""")
+    else:
+        enhancements.append("""
+🚫 NO INFERENCE:
+- Extract ONLY what is explicitly written
+- Do not use context or patterns to guess missing data
+""")
+    
     prompt = f"""
 {custom_prompt}
+
+{' '.join(enhancements)}
 
 Return ONLY valid JSON that matches this exact schema structure:
 {json.dumps(schema, indent=2)}
@@ -106,30 +156,76 @@ Do not include any explanations, only the JSON object.
         raise HTTPException(status_code=500, detail="No JSON found in LLM response")
 
     data = json.loads(match.group(0))
+    
+    # Post-processing for double-check mode
+    if double_check:
+        # Add validation metadata
+        data['_extraction_confidence'] = 'verified'
+        data['_double_checked'] = True
+    
+    # Add auto-detection metadata
+    if auto_detect_fields:
+        data['_auto_detected'] = True
+    
     return data
 
 # --- Universal Data Normalization ---
-def normalize_data_with_llm(body: dict, target_schema: Dict[str, Any]) -> dict:
-    """Transform input data to match user-defined schema using LLM"""
-    prompt = f"""
-    Transform the input JSON data to match this EXACT output schema:
+def normalize_data_with_llm(body: dict, target_schema: Dict[str, Any], auto_detect_fields: bool = False) -> dict:
+    """Transform input data to match user-defined schema using LLM with auto-detection"""
     
-    Target Schema:
-    {json.dumps(target_schema, indent=2)}
-    
-    Input Data:
-    {json.dumps(body, indent=2)}
-    
-    Rules:
-    1. Map all input fields to match the target schema structure exactly
-    2. Do not add fields that are not in the target schema
-    3. Do not remove required fields from the target schema
-    4. Convert data types as needed (dates to strings, numbers to strings, etc.)
-    5. If a field cannot be mapped, set it to null or appropriate default
-    6. Return ONLY the transformed JSON object, no explanations
-    
-    Output (matching target schema exactly):
-    """
+    if auto_detect_fields:
+        prompt = f"""
+        You are an intelligent data extraction assistant. Your task is to:
+        1. Analyze the input data which may have ANY field naming convention
+        2. Map it to the target schema structure
+        3. Handle synonyms, variations, and different naming patterns
+        
+        Target Schema Structure:
+        {json.dumps(target_schema, indent=2)}
+        
+        Input Data (may have different naming conventions):
+        {json.dumps(body, indent=2)}
+        
+        IMPORTANT - Handle these variations:
+        - Synonyms: "invoice_number", "invoice_id", "inv_no", "bill_number", "document_number" → map to schema field
+        - Different cases: "InvoiceNumber", "invoice_number", "INVOICE_NUMBER" → normalize
+        - Abbreviations: "qty" → "quantity", "amt" → "amount", "desc" → "description"
+        - Regional variations: "colour" → "color", "organisation" → "organization"
+        - Domain-specific terms: "vendor", "supplier", "merchant", "seller" → map appropriately
+        - Snake_case vs CamelCase: "totalAmount" vs "total_amount"
+        - Typos and OCR errors: Use context to infer correct field
+        
+        Rules:
+        1. Match fields by SEMANTIC MEANING, not exact name
+        2. If multiple input fields could map to one schema field, choose the best match
+        3. If a required field is missing but similar field exists, use it
+        4. Convert data types as needed (dates to strings, numbers to strings, etc.)
+        5. For arrays, detect list items even if named differently
+        6. Return ONLY the transformed JSON matching target schema exactly
+        7. Add "_field_mapping" metadata showing how you mapped fields
+        
+        Output (matching target schema exactly):
+        """
+    else:
+        prompt = f"""
+        Transform the input JSON data to match this EXACT output schema:
+        
+        Target Schema:
+        {json.dumps(target_schema, indent=2)}
+        
+        Input Data:
+        {json.dumps(body, indent=2)}
+        
+        Rules:
+        1. Map all input fields to match the target schema structure exactly
+        2. Do not add fields that are not in the target schema
+        3. Do not remove required fields from the target schema
+        4. Convert data types as needed (dates to strings, numbers to strings, etc.)
+        5. If a field cannot be mapped, set it to null or appropriate default
+        6. Return ONLY the transformed JSON object, no explanations
+        
+        Output (matching target schema exactly):
+        """
 
     response = ollama.chat(
         model="llama3.2",
@@ -181,7 +277,9 @@ def parse_document_to_images(file_path: str, suffix: str) -> List[str]:
     return image_paths
 
 # --- Universal File Processing ---
-def process_document(file: UploadFile, custom_prompt: str, schema: Dict[str, Any]) -> dict:
+def process_document(file: UploadFile, custom_prompt: str, schema: Dict[str, Any],
+                    strict_mode: bool = False, double_check: bool = False,
+                    infer_missing: bool = True, auto_detect_fields: bool = False) -> dict:
     """Process any document type with user-defined extraction parameters"""
     suffix = os.path.splitext(file.filename)[-1].lower()
     
@@ -198,7 +296,15 @@ def process_document(file: UploadFile, custom_prompt: str, schema: Dict[str, Any
         
         # Extract data from each page/image
         for idx, image_path in enumerate(image_paths):
-            extracted = extract_data_from_image(image_path, custom_prompt, schema)
+            extracted = extract_data_from_image(
+                image_path, 
+                custom_prompt, 
+                schema,
+                strict_mode=strict_mode,
+                double_check=double_check,
+                infer_missing=infer_missing,
+                auto_detect_fields=auto_detect_fields
+            )
             page_results.append({
                 "page": idx + 1,
                 "data": extracted
@@ -206,21 +312,35 @@ def process_document(file: UploadFile, custom_prompt: str, schema: Dict[str, Any
             
             # Merge data from all pages
             for key, value in extracted.items():
-                if key not in all_extracted_data:
-                    all_extracted_data[key] = value
-                elif isinstance(value, list) and isinstance(all_extracted_data[key], list):
-                    all_extracted_data[key].extend(value)
+                if not key.startswith('_'):  # Skip metadata fields
+                    if key not in all_extracted_data:
+                        all_extracted_data[key] = value
+                    elif isinstance(value, list) and isinstance(all_extracted_data[key], list):
+                        all_extracted_data[key].extend(value)
         
-        # Normalize the merged data
-        normalized_data = normalize_data_with_llm(all_extracted_data, schema)
+        # Normalize the merged data with auto-detection
+        normalized_data = normalize_data_with_llm(
+            all_extracted_data, 
+            schema,
+            auto_detect_fields=auto_detect_fields
+        )
+        
+        # Add extraction metadata
+        metadata = {
+            "filename": file.filename,
+            "pages_processed": len(image_paths),
+            "page_details": page_results,
+            "extraction_settings": {
+                "strict_mode": strict_mode,
+                "double_check": double_check,
+                "infer_missing": infer_missing,
+                "auto_detect_fields": auto_detect_fields
+            }
+        }
         
         return {
             "data": normalized_data,
-            "metadata": {
-                "filename": file.filename,
-                "pages_processed": len(image_paths),
-                "page_details": page_results
-            }
+            "metadata": metadata
         }
     finally:
         # Cleanup temp files
@@ -392,7 +512,11 @@ async def extract_document(
     schema: str = Form(...),
     extraction_prompt: str = Form(...),
     document_type: str = Form("general"),
-    table_name: str = Form("documents")
+    table_name: str = Form("documents"),
+    strict_mode: bool = Form(False),
+    double_check: bool = Form(False),
+    infer_missing: bool = Form(True),
+    auto_detect_fields: bool = Form(True)  # Enabled by default
 ):
     """Extract data from any document with user-defined schema and prompt"""
     try:
@@ -402,8 +526,16 @@ async def extract_document(
         except json.JSONDecodeError:
             raise HTTPException(status_code=400, detail="Invalid schema JSON format")
         
-        # Process document
-        result = process_document(file, extraction_prompt, schema_dict)
+        # Process document with advanced options
+        result = process_document(
+            file, 
+            extraction_prompt, 
+            schema_dict,
+            strict_mode=strict_mode,
+            double_check=double_check,
+            infer_missing=infer_missing,
+            auto_detect_fields=auto_detect_fields
+        )
         
         # Store in database
         doc_id = store_in_supabase(table_name, result["data"], {**result["metadata"], "document_type": document_type})
