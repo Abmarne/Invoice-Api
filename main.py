@@ -1,5 +1,5 @@
 from fastapi import FastAPI, HTTPException, Request, UploadFile, File, Form
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from supabase import create_client, Client
@@ -15,6 +15,12 @@ import chromadb
 from chromadb.config import Settings
 from typing import Optional, Dict, Any, List
 import base64
+import csv
+import io
+from reportlab.lib.pagesizes import letter
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib import colors
 
 # --- Logging Setup ---
 logging.basicConfig(level=logging.INFO)
@@ -492,5 +498,231 @@ async def get_documents(table_name: str = "documents", limit: int = 100):
         }
     except Exception as e:
         logger.error(f"Get documents error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# --- Download Endpoints ---
+@app.post("/api/download/json")
+async def download_json(extracted_data: Dict[str, Any]):
+    """Download extracted data as JSON file"""
+    try:
+        json_str = json.dumps(extracted_data, indent=2)
+        return Response(
+            content=json_str,
+            media_type="application/json",
+            headers={"Content-Disposition": "attachment; filename=extracted_data.json"}
+        )
+    except Exception as e:
+        logger.error(f"JSON download error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/download/csv")
+async def download_csv(extracted_data: Dict[str, Any]):
+    """Download extracted data as CSV file"""
+    try:
+        output = io.StringIO()
+        
+        # Flatten the data for CSV
+        def flatten_dict(d, parent_key='', sep='.'):
+            items = []
+            for k, v in d.items():
+                new_key = f"{parent_key}{sep}{k}" if parent_key else k
+                if isinstance(v, dict):
+                    items.extend(flatten_dict(v, new_key, sep=sep).items())
+                elif isinstance(v, list):
+                    # Handle lists specially - convert to string or expand
+                    if len(v) > 0 and isinstance(v[0], dict):
+                        # List of dicts - create separate rows
+                        pass
+                    else:
+                        items.append((new_key, ', '.join(map(str, v))))
+                else:
+                    items.append((new_key, v))
+            return dict(items)
+        
+        flat_data = flatten_dict(extracted_data)
+        
+        writer = csv.DictWriter(output, fieldnames=flat_data.keys())
+        writer.writeheader()
+        writer.writerow(flat_data)
+        
+        return Response(
+            content=output.getvalue(),
+            media_type="text/csv",
+            headers={"Content-Disposition": "attachment; filename=extracted_data.csv"}
+        )
+    except Exception as e:
+        logger.error(f"CSV download error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/download/excel")
+async def download_excel(extracted_data: Dict[str, Any]):
+    """Download extracted data as Excel file"""
+    try:
+        import pandas as pd
+        from openpyxl import Workbook
+        
+        # Create Excel workbook
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Extracted Data"
+        
+        # Add title
+        ws['A1'] = "Extracted Document Data"
+        ws['A1'].font = ws['A1'].font.copy(bold=True, size=16)
+        
+        row_num = 3
+        
+        # Write data
+        def write_data(data, start_col='A', start_row=3):
+            col_offset = 0
+            for key, value in data.items():
+                col_letter = chr(ord('A') + col_offset)
+                cell_ref = f"{col_letter}{start_row}"
+                
+                if isinstance(value, dict):
+                    # Write nested dict header
+                    ws[cell_ref] = key
+                    ws[cell_ref].font = ws[cell_ref].font.copy(bold=True)
+                    # Recursively write nested data
+                    write_data(value, start_col=col_letter, start_row=start_row+1)
+                elif isinstance(value, list):
+                    # Write list
+                    ws[cell_ref] = key
+                    ws[cell_ref].font = ws[cell_ref].font.copy(bold=True)
+                    row_offset = 1
+                    for item in value:
+                        if isinstance(item, dict):
+                            # List of objects
+                            for sub_key, sub_value in item.items():
+                                ws[f"{col_letter}{start_row+row_offset}"] = f"{sub_key}: {sub_value}"
+                                row_offset += 1
+                        else:
+                            ws[f"{col_letter}{start_row+row_offset}"] = item
+                            row_offset += 1
+                else:
+                    ws[cell_ref] = f"{key}: {value}"
+                col_offset += 1
+            
+            return start_row + 1
+        
+        write_data(extracted_data)
+        
+        # Auto-adjust column widths
+        for column in ws.columns:
+            max_length = 0
+            column_letter = column[0].column_letter
+            for cell in column:
+                try:
+                    if len(str(cell.value)) > max_length:
+                        max_length = len(str(cell.value))
+                except:
+                    pass
+            adjusted_width = min(max_length + 2, 50)
+            ws.column_dimensions[column_letter].width = adjusted_width
+        
+        # Save to bytes
+        excel_buffer = io.BytesIO()
+        wb.save(excel_buffer)
+        excel_buffer.seek(0)
+        
+        return Response(
+            content=excel_buffer.getvalue(),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": "attachment; filename=extracted_data.xlsx"}
+        )
+    except ImportError:
+        # Fallback if pandas/openpyxl not installed
+        logger.error("Excel libraries not installed")
+        raise HTTPException(status_code=500, detail="Excel export requires pandas and openpyxl. Install with: pip install pandas openpyxl")
+    except Exception as e:
+        logger.error(f"Excel download error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/download/pdf")
+async def download_pdf(extracted_data: Dict[str, Any], metadata: Optional[Dict[str, Any]] = None):
+    """Download extracted data as PDF file"""
+    try:
+        # Create PDF buffer
+        buffer = io.BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=letter)
+        elements = []
+        styles = getSampleStyleSheet()
+        
+        # Title
+        title = Paragraph("Extracted Document Data", styles['Title'])
+        elements.append(title)
+        elements.append(Spacer(1, 20))
+        
+        # Metadata if available
+        if metadata:
+            elements.append(Paragraph("Document Metadata", styles['Heading2']))
+            meta_data = [["Field", "Value"]]
+            for key, value in metadata.items():
+                if key != 'page_details':  # Skip complex metadata
+                    meta_data.append([str(key), str(value)])
+            
+            meta_table = Table(meta_data)
+            meta_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, 0), 12),
+                ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+                ('GRID', (0, 0), (-1, -1), 0.5, colors.black),
+                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ]))
+            elements.append(meta_table)
+            elements.append(Spacer(1, 20))
+        
+        # Extracted data
+        elements.append(Paragraph("Extracted Information", styles['Heading2']))
+        
+        # Convert dict to table data
+        table_data = [["Field", "Value"]]
+        
+        def add_to_table(data, prefix=''):
+            for key, value in data.items():
+                field_name = f"{prefix}.{key}" if prefix else key
+                if isinstance(value, dict):
+                    add_to_table(value, field_name)
+                elif isinstance(value, list):
+                    # Format list items
+                    items_str = "\n".join([f"• {item}" if not isinstance(item, dict) else 
+                                         "\n".join([f"  - {k}: {v}" for k, v in item.items()])
+                                         for item in value])
+                    table_data.append([field_name, items_str])
+                else:
+                    table_data.append([field_name, str(value) if value is not None else "N/A"])
+        
+        add_to_table(extracted_data)
+        
+        # Create table
+        data_table = Table(table_data, colWidths=['30%', '70%'])
+        data_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.lightblue),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.black),
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 12),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+            ('TOPPADDING', (0, 0), (-1, -1), 8),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.lightgrey]),
+        ]))
+        elements.append(data_table)
+        
+        # Build PDF
+        doc.build(elements)
+        buffer.seek(0)
+        
+        return Response(
+            content=buffer.getvalue(),
+            media_type="application/pdf",
+            headers={"Content-Disposition": "attachment; filename=extracted_data.pdf"}
+        )
+    except Exception as e:
+        logger.error(f"PDF download error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
     

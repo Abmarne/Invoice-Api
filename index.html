@@ -266,6 +266,33 @@
             margin-bottom: 20px;
             padding-bottom: 15px;
             border-bottom: 2px solid var(--border);
+            flex-wrap: wrap;
+            gap: 15px;
+        }
+
+        .download-buttons {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .btn-download {
+            padding: 10px 20px;
+            font-size: 14px;
+            background: var(--light);
+            border: 2px solid var(--border);
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.3s;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .btn-download:hover {
+            border-color: var(--primary);
+            background: rgba(79, 70, 229, 0.05);
+            transform: translateY(-1px);
         }
 
         .result-status {
@@ -483,7 +510,24 @@
         <div class="result-section" id="result-section">
             <div class="result-header">
                 <h2 style="color: var(--dark);">Extraction Results</h2>
-                <span class="result-status status-success" id="result-status">Success ✓</span>
+                <div>
+                    <span class="result-status status-success" id="result-status">Success ✓</span>
+                </div>
+            </div>
+
+            <div class="download-buttons">
+                <button class="btn-download" onclick="downloadData('json')">
+                    📄 Download JSON
+                </button>
+                <button class="btn-download" onclick="downloadData('csv')">
+                    📊 Download CSV
+                </button>
+                <button class="btn-download" onclick="downloadData('excel')">
+                    📈 Download Excel
+                </button>
+                <button class="btn-download" onclick="downloadData('pdf')">
+                    📑 Download PDF
+                </button>
             </div>
 
             <div class="stats-grid" id="stats-grid">
@@ -700,6 +744,9 @@
             document.getElementById('result-status').className = 'result-status status-success';
             document.getElementById('result-status').textContent = 'Success ✓';
 
+            // Store result for downloads
+            window.lastExtractionResult = result;
+
             // Display extracted data
             document.getElementById('json-output').textContent = JSON.stringify(result.extracted_data, null, 2);
             document.getElementById('metadata-output').textContent = JSON.stringify(result.metadata, null, 2);
@@ -724,6 +771,88 @@
                     <div class="stat-label">Vector Indexed</div>
                 </div>
             `;
+        }
+
+        async function downloadData(format) {
+            if (!window.lastExtractionResult) {
+                alert('No extraction data available. Please extract data first.');
+                return;
+            }
+
+            const result = window.lastExtractionResult;
+            const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+            
+            try {
+                // Show loading state
+                const originalText = event.target.innerHTML;
+                event.target.innerHTML = '⏳ Preparing...';
+                event.target.disabled = true;
+
+                let url = `/api/download/${format}`;
+                let method = 'POST';
+                let body = null;
+                let headers = {};
+
+                if (format === 'json' || format === 'csv') {
+                    body = JSON.stringify(result.extracted_data);
+                    headers['Content-Type'] = 'application/json';
+                } else if (format === 'excel') {
+                    body = JSON.stringify(result.extracted_data);
+                    headers['Content-Type'] = 'application/json';
+                } else if (format === 'pdf') {
+                    body = JSON.stringify({
+                        extracted_data: result.extracted_data,
+                        metadata: result.metadata
+                    });
+                    headers['Content-Type'] = 'application/json';
+                }
+
+                const response = await fetch(url, {
+                    method: method,
+                    headers: headers,
+                    body: body
+                });
+
+                if (response.ok) {
+                    // Create blob and download
+                    const blob = await response.blob();
+                    const downloadUrl = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = downloadUrl;
+                    
+                    // Generate filename
+                    const baseFilename = `extracted_${timestamp}`;
+                    const extensions = { json: 'json', csv: 'csv', excel: 'xlsx', pdf: 'pdf' };
+                    a.download = `${baseFilename}.${extensions[format]}`;
+                    
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    window.URL.revokeObjectURL(downloadUrl);
+                    
+                    // Show success
+                    event.target.innerHTML = '✓ Downloaded';
+                    setTimeout(() => {
+                        event.target.innerHTML = originalText;
+                        event.target.disabled = false;
+                    }, 2000);
+                } else {
+                    const error = await response.json();
+                    alert(`Download failed: ${error.detail || 'Unknown error'}`);
+                    event.target.innerHTML = originalText;
+                    event.target.disabled = false;
+                }
+            } catch (error) {
+                console.error('Download error:', error);
+                alert(`Download error: ${error.message}`);
+                // Restore button
+                const originalText = event.target.innerHTML;
+                event.target.innerHTML = originalText.replace('⏳ Preparing...', '❌ Error');
+                setTimeout(() => {
+                    event.target.innerHTML = originalText;
+                    event.target.disabled = false;
+                }, 2000);
+            }
         }
 
         function showError(message) {

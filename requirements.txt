@@ -6,3 +6,6 @@ pymupdf
 python-multipart
 uvicorn
 chromadb
+reportlab
+pandas
+openpyxl
